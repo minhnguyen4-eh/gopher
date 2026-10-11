@@ -16,10 +16,10 @@ def _get_network_service() -> str:
     return "Wi-Fi"
 
 
-def enable_pac(pac_path: str, service: str | None = None) -> bool:
+def enable_pac(pac_url: str, service: str | None = None) -> bool:
     svc = service or _get_network_service()
     result = subprocess.run(
-        ["networksetup", "-setautoproxyurl", svc, f"file://{pac_path}"],
+        ["networksetup", "-setautoproxyurl", svc, pac_url],
         capture_output=True,
     )
     subprocess.run(["networksetup", "-setautoproxystate", svc, "on"], capture_output=True)
@@ -34,11 +34,3 @@ def disable_pac(service: str | None = None) -> bool:
     )
     return result.returncode == 0
 
-
-def is_pac_enabled(pac_path: str, service: str | None = None) -> bool:
-    svc = service or _get_network_service()
-    result = subprocess.run(
-        ["networksetup", "-getautoproxyurl", svc],
-        capture_output=True, text=True,
-    )
-    return "Enabled: Yes" in result.stdout and f"file://{pac_path}" in result.stdout

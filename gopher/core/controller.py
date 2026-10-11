@@ -4,7 +4,8 @@ import threading
 import time
 
 from . import config as cfg_module
-from . import pac, proxy
+from . import pac, proxy, tailscale
+from .pac_server import PacServer
 from .tunnel import SSHTunnel
 
 OFF, CONNECTING, CONNECTED, RECONNECTING, ERROR = (
@@ -33,6 +34,8 @@ class Controller:
         self._lock = threading.RLock()
         self._listeners = []
         self.state = OFF
+        self.error = ""
+        self._pac_server = PacServer()
         self.tunnel = self._make_tunnel()
 
     # -- observers -----------------------------------------------------
@@ -54,6 +57,8 @@ class Controller:
         with self._lock:
             state = self.state
         label = _LABEL.get(state) or f"connected ({self.cfg['ssh_host']})"
+        if state == ERROR and self.error:
+            label = f"{label}: {self.error}"
         return {
             "state": state,
             "connected": state == CONNECTED,
@@ -80,11 +85,22 @@ class Controller:
             if self.state in (CONNECTED, CONNECTING):
                 return
             self.state = CONNECTING
+            self.error = ""
         self._emit()
         threading.Thread(target=self._connect_worker, daemon=True).start()
 
     def _connect_worker(self):
         tunnel = self.tunnel
+        if tailscale.is_tailnet_host(self.cfg["ssh_host"]):
+            try:
+                tailscale.ensure_ready()  # starts the daemon / opens the login page if needed
+            except tailscale.TailscaleError as e:
+                with self._lock:
+                    if self.state in (CONNECTING, RECONNECTING):
+                        self.error = str(e)
+                        self.state = ERROR
+                self._emit()
+                return
         ok = tunnel.start()
         with self._lock:
             cancelled = self.state not in (CONNECTING, RECONNECTING)
@@ -92,14 +108,16 @@ class Controller:
             tunnel.stop()
             return
         if ok:
-            proxy.enable_pac(pac.write(self.cfg))
+            self._enable_pac()
             self._set_state(CONNECTED)
         elif not cancelled:
+            self.error = tunnel.last_error
             self._set_state(ERROR)
 
     def disconnect(self):
         self.tunnel.stop()
         proxy.disable_pac()
+        self._pac_server.stop()
         self._set_state(OFF)
 
     def shutdown(self):
@@ -121,12 +139,23 @@ class Controller:
             self._emit()
 
     # -- internals -----------------------------------------------------
+    def _enable_pac(self):
+        path = pac.write(self.cfg)  # also the fallback if the PAC port is taken
+        try:
+            url = self._pac_server.start(
+                lambda: pac.render(self.cfg["domains"], self.cfg["local_port"]))
+        except OSError:
+            url = f"file://{path}"
+        proxy.enable_pac(url)
+
     def _make_tunnel(self):
         t = self._tunnel_factory(
             host=self.cfg["ssh_host"],
             user=self.cfg["ssh_user"],
             port=self.cfg["ssh_port"],
             local_port=self.cfg["local_port"],
+            proxy_command=(tailscale.proxy_command()
+                           if tailscale.is_tailnet_host(self.cfg["ssh_host"]) else None),
         )
         t.set_on_disconnect(self._on_tunnel_drop)
         return t
@@ -137,6 +166,7 @@ class Controller:
             threading.Thread(target=self._reconnect, daemon=True).start()
         else:
             proxy.disable_pac()
+            self._pac_server.stop()
             self._set_state(OFF)
 
     def _reconnect(self):
