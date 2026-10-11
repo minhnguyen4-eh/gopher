@@ -18,10 +18,11 @@ Discord app → macOS PAC proxy → SOCKS5 proxy (external) → Discord servers
                             SSH tunnel or direct
 ```
 
-1. **PAC file** (generated from config) — sends only the configured domains (`discord.com`, `discordapp.com`, ...) through SOCKS5; everything else is DIRECT
+1. **PAC file** (generated from config) — sends only the configured domains (`discord.com`, `discordapp.com`, ...) through SOCKS5; everything else is DIRECT. Served at `http://127.0.0.1:18080/proxy.pac` because apps ignore `file://` PAC URLs (file fallback if the port is busy)
 2. **SOCKS5 proxy** — an SSH tunnel (`ssh -N -D 1080`) or a hosted proxy server
 3. **macOS system proxy** — set via `networksetup -setautoproxyurl`
-4. **Menubar app** — toggle on/off, open the dashboard, auto-reconnect
+4. **Tailscale (userspace)** — for tailnet hosts, `tailscaled --tun=userspace-networking` runs as a normal process and SSH reaches the host through its SOCKS5 port (`nc -X 5 -x localhost:1055`)
+5. **Menubar app** — toggle on/off, open the dashboard, auto-reconnect
 
 ---
 
@@ -46,11 +47,14 @@ gopher/
 │   │   ├── tunnel.py        # SSH tunnel manager — start/stop/monitor process
 │   │   ├── proxy.py         # macOS networksetup PAC control
 │   │   ├── pac.py           # PAC file generated from config
+│   │   ├── pac_server.py    # serves the PAC over http://127.0.0.1 (apps ignore file:// PACs)
+│   │   ├── tailscale.py     # userspace Tailscale daemon + login, for tailnet SSH hosts
 │   │   └── controller.py    # connect/disconnect/reconnect state machine
 │   └── ui/
 │       ├── menubar.py       # rumps menubar, thin layer over the controller
 │       └── dashboard/       # local web UI (server.py + index.html)
 ├── tests/
+├── GUIDANCE.md
 ├── PLAN.md
 └── README.md
 ```
@@ -113,9 +117,9 @@ Two ARM VMs, free permanently, with a real static IP. Set up like any VPS and us
 
 ---
 
-### Option D: Tailscale + a home machine
+### Option D: Tailscale + a home machine (current setup)
 
-Install Tailscale on a home machine and the work machine, then SSH over the Tailscale IP (`100.x.x.x`).
+Install Tailscale on a home machine (Windows, with OpenSSH Server) and run the userspace CLI on the Mac, then SSH over the Tailscale IP (`100.x.x.x`). Gopher starts and logs in to Tailscale itself. See [GUIDANCE.md](GUIDANCE.md).
 
 **Pros**: No cloud needed, peer-to-peer, free  
 **Cons**: The home machine must stay on
@@ -139,7 +143,8 @@ Install Tailscale on a home machine and the work machine, then SSH over the Tail
 |-----|------|
 | 1 | Core app (tunnel + PAC + proxy) — done ✅ |
 | 2 | Menubar status UI, dashboard, core/ui refactor — done ✅ |
-| 3 | Build `.app`, launch at login, distribute |
+| 3 | Tailscale userspace support, PAC over http, clearer errors, cleanup — done ✅ |
+| 4 | Build `.app`, launch at login, distribute |
 
 ---
 
