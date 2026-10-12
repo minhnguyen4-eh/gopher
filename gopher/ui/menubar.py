@@ -1,6 +1,7 @@
 """macOS menubar (rumps). Thin layer over core.Controller."""
 
 import rumps
+from PyObjCTools import AppHelper
 
 from ..core.controller import (
     CONNECTED, CONNECTING, ERROR, RECONNECTING, Controller, NotConfigured,
@@ -30,7 +31,8 @@ class MenubarApp(rumps.App):
             rumps.MenuItem("Quit Gopher", callback=self.on_quit),
         ]
 
-        controller.subscribe(self.render)
+        # controller notifies from worker threads; AppKit menus must be touched on the main thread
+        controller.subscribe(lambda snap: AppHelper.callAfter(self.render, snap))
         self.render(controller.snapshot())
 
     def render(self, snap: dict):
